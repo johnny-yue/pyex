@@ -49,6 +49,9 @@ class Order:
     def filled(self):
         return self.status == OrderStatus.filled
 
+    def final(self):
+        return self.status == OrderStatus.cancelled or self.status == OrderStatus.filled
+
 class Cancel:
     def __init__(self, order_id):
         self.order_id = order_id
@@ -86,6 +89,11 @@ class Level:
         assert(order.side == self.side)
         self.orders.append(order)
 
+    def cancel(self, order : Order):
+        self.orders.remove(order)
+        order.status = OrderStatus.cancelled
+        order.leave_qty = 0
+
     def empty(self):
         return len(self.orders) == 0
 
@@ -117,6 +125,10 @@ class OrderBook:
         for px in removed_px:
             del self.book[px]
 
+    def cancel(self, order : Order):
+        lv = self.book.get(order.price)
+        lv.cancel(order)
+
 class Engine:
     def __init__(self):
         self.books = {}
@@ -125,6 +137,10 @@ class Engine:
         self.orders = {}
 
     def process_order(self, order : Order):
+        if order.order_id in self.orders:
+            return {'code':'500', 'msg':'duplicated order_id'}
+        self.orders[order.order_id] = order
+
         my_book = self.books[order.side]
         op_book = self.books[order.side.opposite()]
 
@@ -133,22 +149,19 @@ class Engine:
         if not order.filled():
             my_book.add(order)
         
-
+        return {'code':'200', 'msg':'order accepted'}
 
     def process_cancel(self, cancel : Cancel):
         if cancel.order_id in self.orders:
             order = self.orders[cancel.order_id]
             if order.final():
                 # error, cannot cancel
-                return {}
-            lv = self.books[order.side].get(order.price)
-            if lv is None:
-                # order lvel not found.
-                return {}
-            lv.cancel(order)
+                return {'code':500, 'msg':'order is done, cannot cancel'}
+            return self.books[order.side].cancel(order)
+            
         else:
             # error, order_id not found
-            return {}
+            return {'code':500, 'msg':'cannot cancel order that does not exist'}
 
 
     def process(self, request):
@@ -159,7 +172,7 @@ class Engine:
                 return self.process_cancel(request)
         except Exception as err:
             print(err)
-            return {}
+            return {'code':'500', 'msg':str(err)}
 
 
 
